@@ -412,6 +412,28 @@ public class MainActivity extends Activity implements Discovery.Listener {
             if (url != null && !url.contains("__pair")) {
                 panel.setVisibility(View.GONE);
             }
+            view.evaluateJavascript(TAP_FEEDBACK_CSS, null);
         }
     }
+
+    /**
+     * Replace WebView's default tap highlight with something quiet.
+     *
+     * Android paints a solid highlight block over whatever was tapped, which on
+     * this device is a harsh green flash across the whole control. We switch it
+     * off and substitute a subtle dim + short transition, so pressing a button
+     * still feels responsive without the colour block.
+     */
+    private static final String TAP_FEEDBACK_CSS =
+            "(function(){"
+            + "if(document.getElementById('dsh-lan-pair-feedback'))return;"
+            + "var s=document.createElement('style');"
+            + "s.id='dsh-lan-pair-feedback';"
+            + "s.textContent='*{-webkit-tap-highlight-color:transparent !important;}"
+            + "button,a,[role=\"button\"],input[type=\"button\"]{"
+            + "-webkit-transition:opacity 90ms ease-out;transition:opacity 90ms ease-out;}"
+            + "button:active,a:active,[role=\"button\"]:active,input[type=\"button\"]:active{"
+            + "opacity:0.72;}';"
+            + "document.head.appendChild(s);"
+            + "})()";
 }

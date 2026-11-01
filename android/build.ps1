@@ -26,8 +26,8 @@ $classes = Join-Path $build 'classes'
 $dexdir = Join-Path $build 'dex'
 $dist = Join-Path $root 'dist'
 $ks = Join-Path $root 'dshpair.keystore'
-$versionName = '0.2.1'
-$versionCode = '3'
+$versionName = '0.2.2'
+$versionCode = '4'
 $minSdk = '26'
 $targetSdk = '34'
 
@@ -45,12 +45,22 @@ Write-Host "[1/6] javac ($($sources.Count) files)"
 if ($LASTEXITCODE -ne 0) { throw 'javac failed' }
 
 # 2. resources + manifest -> base apk
-Write-Host '[2/6] aapt2 link'
+Write-Host '[2/6] aapt2 compile + link'
 $base = Join-Path $build 'base.apk'
-& (Join-Path $bt 'aapt2.exe') link -o $base -I $ajar `
-    --manifest (Join-Path $root 'AndroidManifest.xml') `
-    --min-sdk-version $minSdk --target-sdk-version $targetSdk `
-    --version-code $versionCode --version-name $versionName
+$resDir = Join-Path $root 'res'
+$resFlat = Join-Path $build 'resources.zip'
+$linkArgs = @(
+    'link', '-o', $base, '-I', $ajar,
+    '--manifest', (Join-Path $root 'AndroidManifest.xml'),
+    '--min-sdk-version', $minSdk, '--target-sdk-version', $targetSdk,
+    '--version-code', $versionCode, '--version-name', $versionName
+)
+if (Test-Path $resDir) {
+    & (Join-Path $bt 'aapt2.exe') compile --dir $resDir -o $resFlat
+    if ($LASTEXITCODE -ne 0) { throw 'aapt2 compile failed' }
+    $linkArgs += $resFlat
+}
+& (Join-Path $bt 'aapt2.exe') @linkArgs
 if ($LASTEXITCODE -ne 0) { throw 'aapt2 link failed' }
 
 # 3. dex
