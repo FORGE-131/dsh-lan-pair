@@ -413,8 +413,32 @@ public class MainActivity extends Activity implements Discovery.Listener {
                 panel.setVisibility(View.GONE);
             }
             view.evaluateJavascript(TAP_FEEDBACK_CSS, null);
+            view.evaluateJavascript(FOCUS_GUARD_JS, null);
         }
     }
+
+    /**
+     * Keep the soft keyboard closed unless the user actually tapped the field.
+     *
+     * DSH focuses the composer whenever a session becomes active (switching a
+     * session, creating one), which on a tablet throws the keyboard up over the
+     * whole conversation. We do not want to forbid focusing - tapping the input
+     * must still work - so we only drop focus that did not come from a touch on
+     * that same field.
+     */
+    private static final String FOCUS_GUARD_JS =
+            "(function(){"
+            + "if(window.__dshLanPairFocusGuard)return;"
+            + "window.__dshLanPairFocusGuard=true;"
+            + "var touched=null,touchedAt=0;"
+            + "document.addEventListener('touchstart',function(e){touched=e.target;touchedAt=Date.now();},true);"
+            + "document.addEventListener('focusin',function(e){"
+            + "var el=e.target;"
+            + "if(!el||!(el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.isContentEditable))return;"
+            + "var fromTouch=touched&&(el===touched||el.contains(touched)||touched.contains(el));"
+            + "if(!fromTouch||Date.now()-touchedAt>700){el.blur();}"
+            + "},true);"
+            + "})()";
 
     /**
      * Replace WebView's default tap highlight with something quiet.
