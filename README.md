@@ -3,12 +3,28 @@
 把电脑上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 网页界面，
 安全地开放给同一个局域网里的手机/平板使用。
 
+![平板上的效果](docs/screenshot.png)
+
 - **插件端**（`dsh-lan-pair`）：在 DSH 进程内起一个局域网监听，反向代理到本机回环，
   自动完成 DSH 的 token 交换并把会话 cookie 自己拿着。**手机永远拿不到 DSH 的启动 token。**
-- **App 端**（DSH LAN）：自动发现局域网里的 DSH 电脑，输入一次配对密钥，之后打开即连，
+- **App 端**（DSH LAN）：自动发现局域网里的 DSH 电脑，输入一次 **4 位配对码**，之后打开即连，
   用系统 WebView 全屏显示界面。
+- **默认不可见**：不点「开启配对」，这台电脑根本不会出现在局域网里。
 
 手机端不需要 root、不需要 USB 调试、不需要自己拼 URL。
+
+---
+
+## 快速开始（三步）
+
+1. **电脑**：把插件装进 DSH 的 profile，在 `bundles` 里登记，重启 DSH（见下面「安装插件」）
+2. **电脑**：DSH **设置 → 移动设备 → 开启配对**，会弹出一个窗口显示 **4 位数字**
+3. **手机**：装好 App，列表里点这台电脑，输入那 4 位数字 → 连上
+
+之后每次打开 App 都自动连，不需要再输入任何东西。
+
+> 分享给别人时提醒两件事：手机需要允许「安装未知来源的应用」；
+> 首次连接如果 Windows 弹出防火墙提示，要允许（只放行那一个 TCP 端口即可）。
 
 ---
 
@@ -29,14 +45,16 @@
 
 ### 1. 把包装进 profile
 
-`<profile>` 换成你的 profile 名（例如 `web` 或 `0.1.7-rc.2`）：
+`<profile>` 是你的 profile 名。**用官方桌面版启动器时，profile 名通常就是 DSH 的版本号**
+（例如 `0.1.7-rc.2`）；如果你自己用 `dsh web` 起的，一般是 `web`。
 
 ```bash
-# 在 $DSH_HOME/profiles/<profile> 目录下
-pnpm add link:/path/to/dsh-lan-pair
-# 或者从 GitHub 安装：
-# pnpm add github:<you>/dsh-lan-pair#v0.1.0
+# 进入 profile 目录，例如 Windows：
+#   cd %USERPROFILE%\.dsh\profiles\0.1.7-rc.2
+pnpm add github:FORGE-131/dsh-lan-pair#v0.2.3
 ```
+
+想从本地目录安装（改代码调试时）就用 `pnpm add link:/path/to/dsh-lan-pair`。
 
 ### 2. 在 bundles 里登记
 
@@ -115,7 +133,7 @@ $DSH_HOME/lan-pair.json      # 例如 C:\Users\<you>\.dsh\lan-pair.json
 从 Releases 下载 `dsh-lan-pair-<version>.apk`，侧载安装（需要允许"未知来源"）。
 
 - 最低 Android 8.0（API 26），未限制 CPU 架构（不含原生库）
-- 体积约 16 KB，用系统自带的 WebView 渲染，不打包浏览器内核
+- 体积约 41 KB，用系统自带的 WebView 渲染，不打包浏览器内核
 - 应用签名是自签名证书（`CN=DSH LAN Pair`），不是商店签名
 
 ## 使用
