@@ -1,0 +1,10 @@
+# build output
+android/build/
+android/dist/*.apk.bak
+
+# keystore: never commit signing material
+android/*.keystore
+
+# node
+node_modules/
+pnpm-lock.yaml.bak

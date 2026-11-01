@@ -1,0 +1,179 @@
+# DSH LAN Pair
+
+把电脑上的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 网页界面，
+安全地开放给同一个局域网里的手机/平板使用。
+
+- **插件端**（`dsh-lan-pair`）：在 DSH 进程内起一个局域网监听，反向代理到本机回环，
+  自动完成 DSH 的 token 交换并把会话 cookie 自己拿着。**手机永远拿不到 DSH 的启动 token。**
+- **App 端**（DSH LAN）：自动发现局域网里的 DSH 电脑，输入一次配对密钥，之后打开即连，
+  用系统 WebView 全屏显示界面。
+
+手机端不需要 root、不需要 USB 调试、不需要自己拼 URL。
+
+---
+
+## 为什么需要它
+
+`dsh web` 出于安全考虑**只监听 127.0.0.1，并明确拒绝 `--host 0.0.0.0`**。
+它的会话 cookie 还带 `SameSite=Strict`，所以任何浏览器用"外部链接"打开都会得到
+`HTTP 401 dsh web authentication required`。
+
+这个插件把这两件事一起解决：自己开一个局域网端口，自己持有 cookie，
+手机只跟插件说话。
+
+---
+
+## 安装插件
+
+前提：已经装好 DSH（本插件在 `0.1.7-rc.2` 上验证过），并且有一个 web profile。
+
+### 1. 把包装进 profile
+
+`<profile>` 换成你的 profile 名（例如 `web` 或 `0.1.7-rc.2`）：
+
+```bash
+# 在 $DSH_HOME/profiles/<profile> 目录下
+pnpm add link:/path/to/dsh-lan-pair
+# 或者从 GitHub 安装：
+# pnpm add github:<you>/dsh-lan-pair#v0.1.0
+```
+
+### 2. 在 bundles 里登记
+
+编辑 `$DSH_HOME/profiles/<profile>/package.json`，把包名加进 `dsh.profile.bundles`：
+
+```json
+{
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-lan-pair"
+      ]
+    }
+  }
+}
+```
+
+本包自带 `cordis.patch.yml`，登记后会自动生效，**不需要手动改 patch 文件**。
+
+### 3. 重启 DSH
+
+启动日志里应该出现：
+
+```
+[dsh-lan-pair] listening on 0.0.0.0:8099 -> 127.0.0.1:3080
+[dsh-lan-pair] pair URL: http://<this-pc-lan-ip>:8099/__pair?k=<secret>
+[dsh-lan-pair] mDNS advertising <hostname> (win32)._dshpair._tcp.local at 192.168.x.x:8099
+```
+
+如果 Windows 防火墙弹出提示，请允许；或者手动放行这一个 TCP 端口（只对本子网）：
+
+```powershell
+netsh advfirewall firewall add rule name="DSH LAN Pair" dir=in action=allow protocol=TCP localport=8099 profile=private,domain remoteip=LocalSubnet
+```
+
+---
+
+## 配对密钥
+
+首次启动时随机生成，保存在：
+
+```
+$DSH_HOME/lan-pair.json      # 例如 C:\Users\<you>\.dsh\lan-pair.json
+```
+
+```json
+{ "secret": "bfrVhwqHdzue50xo", "createdAt": "2026-11-01T21:40:07.737Z" }
+```
+
+想换密钥就删掉这个文件再重启 DSH。
+
+环境变量优先级更高，可用于临时指定：
+
+| 变量 | 作用 |
+|---|---|
+| `DSH_LAN_PAIR_SECRET` | 覆盖密钥 |
+| `DSH_LAN_PAIR_PORT` | 覆盖端口（默认 8099） |
+| `DSH_LAN_PAIR_DEBUG` | 输出 mDNS 报文诊断日志 |
+
+---
+
+## 安装 App
+
+从 Releases 下载 `dsh-lan-pair-<version>.apk`，侧载安装（需要允许"未知来源"）。
+
+- 最低 Android 8.0（API 26），未限制 CPU 架构（不含原生库）
+- 体积约 16 KB，用系统自带的 WebView 渲染，不打包浏览器内核
+- 应用签名是自签名证书（`CN=DSH LAN Pair`），不是商店签名
+
+## 使用
+
+1. 手机上打开 **DSH LAN**
+2. 它会扫描局域网并列出找到的电脑（例如 `DESKTOP-I9IRUS8 (win32) 192.168.1.14:8099`）
+3. 填入配对密钥，点 **连接**
+4. 之后每次打开都会自动连；想换电脑就按返回键调出连接面板
+
+如果扫描不到，可以直接在地址栏手动填 `IP:端口`——只要同一局域网就一定能用。
+
+---
+
+## 故障排查
+
+| 现象 | 原因与处理 |
+|---|---|
+| App 显示"密钥不对" | 密钥过期或换了 `lan-pair.json`，重新复制一次 |
+| App 显示"连不上" | 电脑上 DSH 没启动、不在同一 Wi-Fi、或防火墙拦了 8099 |
+| 扫描一直空 | 路由器开了 AP 隔离 / 客户机隔离；改用 Adb 或手动填地址 |
+| 启动时报 8099 被占用 | 已经有一个 DSH 实例在跑；同一个 profile 只应有一个实例 |
+| 更新 DSH 后插件失效 | 见下方兼容性说明 |
+
+## 兼容性
+
+插件依赖 DSH 内部的 `connection` 与 `webServer` 两个服务名，以及
+`connection.authenticatedUrl()`。这些**不是公开稳定 API**，DSH 升级后可能变化。
+请在 `package.json` 的 `peerDependencies` 里锁定你验证过的 DSH 版本。
+
+已验证组合：DSH `0.1.7-rc.2` + Android 15/16 (HyperOS)。
+
+## 从源码构建 App
+
+不需要 Android Studio 或 Gradle，只用四样东西：`aapt2`、`d8`、`zipalign`、`apksigner`
+（来自 Android build-tools）加一个 `android.jar`。
+
+```powershell
+# 一次性准备（示例路径，见 android/build.ps1 顶部变量）
+#   C:\Users\<you>\android-tools\build-tools\android-14\
+#   C:\Users\<you>\android-tools\platform\android-35\android.jar
+#   C:\Users\<you>\android-tools\r8-<version>.jar
+
+powershell -ExecutionPolicy Bypass -File android\build.ps1
+# 产物：android\dist\dsh-lan-pair-<version>.apk
+```
+
+两个已知坑，脚本里已处理：
+
+1. `build-tools r34` 自带的 **R8 8.2 会在任何带 `EnclosingMethod` 属性的类上崩**（也就是 javac 生成的
+   每一个匿名类），报 `NullPointerException: String.length() parameter1 is null`。
+   解决办法是从 Google Maven 取一个独立的 R8 jar（`dl.google.com/android/maven2`）来跑 dex。
+2. **JDK 25 会让老 R8 挂掉**，构建用便携式 JDK 21。
+3. 给 `package.json` 写文件时不要带 BOM，`pnpm` 会报 `Invalid package.json`。
+
+## 开发工具
+
+```bash
+# 独立验证 mDNS 广播（发真实 PTR 查询并自行解码）
+node tools/mdns-probe.mjs 6
+node tools/mdns-probe.mjs 6 127.0.0.1   # 本机单播自检
+```
+
+## 安全说明
+
+配对密钥只是**防误连**，不是强加密：局域网内明文 HTTP，能抓包的人也能拿到会话。
+它解决的是"同一个 Wi-Fi 下的邻居随手打开就能指挥你的电脑"这一类意外暴露。
+如果需要真正安全，请自行套 TLS 反向代理。
+
+## License
+
+MIT
