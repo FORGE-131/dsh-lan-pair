@@ -27,8 +27,14 @@ import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * A shell around the DeepSeek Harness web GUI.
@@ -156,8 +162,8 @@ public class MainActivity extends Activity implements Discovery.Listener {
         outer.addView(hostPortField);
 
         secretField = new EditText(this);
-        secretField.setHint("配对密钥（电脑上 lan-pair.json 里的 secret）");
-        secretField.setInputType(InputType.TYPE_CLASS_TEXT);
+        secretField.setHint("4 位配对码（在电脑 DSH 的「移动设备」里开启配对）");
+        secretField.setInputType(InputType.TYPE_CLASS_NUMBER);
         secretField.setTextColor(Color.WHITE);
         secretField.setHintTextColor(0xFF7A7A80);
         outer.addView(secretField);
@@ -198,13 +204,13 @@ public class MainActivity extends Activity implements Discovery.Listener {
 
     private void connectFromFields() {
         String raw = hostPortField.getText().toString().trim();
-        String secret = secretField.getText().toString().trim();
+        String entered = secretField.getText().toString().trim();
         if (raw.isEmpty()) {
             setStatus("先选一个设备，或手动填电脑地址（例如 192.168.1.14:8099）");
             return;
         }
-        if (secret.isEmpty()) {
-            setStatus("配对密钥不能为空");
+        if (entered.isEmpty()) {
+            setStatus("请输入电脑上显示的 4 位配对码");
             return;
         }
         String host = raw;
@@ -219,7 +225,81 @@ public class MainActivity extends Activity implements Discovery.Listener {
                 return;
             }
         }
-        connectTo(host, port, secret);
+        if (entered.matches("\\d{4}")) {
+            claimWithCode(host, port, entered);
+        } else {
+            // fallback: someone pasted the long-term secret from lan-pair.json
+            connectTo(host, port, entered);
+        }
+    }
+
+    /**
+     * Spend a 4-digit pairing code. The desktop answers with the long-lived
+     * secret, which we store so the code is never needed again.
+     */
+    private void claimWithCode(final String host, final int port, final String code) {
+        setStatus("正在用配对码连接 " + host + ":" + port + " …");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String secret = null;
+                String error = null;
+                HttpURLConnection connection = null;
+                try {
+                    URL url = new URL("http://" + host + ":" + port + "/__claim?code=" + code);
+                    connection = (HttpURLConnection) url.openConnection();
+                    connection.setConnectTimeout(6000);
+                    connection.setReadTimeout(6000);
+                    connection.setRequestMethod("GET");
+                    int statusCode = connection.getResponseCode();
+                    InputStream stream = statusCode >= 400 ? connection.getErrorStream() : connection.getInputStream();
+                    String body = stream == null ? "" : readAll(stream);
+                    if (statusCode == 200) {
+                        Matcher matcher = Pattern.compile("\"secret\"\\s*:\\s*\"([^\"]+)\"").matcher(body);
+                        if (matcher.find()) {
+                            secret = matcher.group(1);
+                        } else {
+                            error = "电脑返回的内容看不懂：" + body;
+                        }
+                    } else if (statusCode == 403) {
+                        error = "电脑上没有开启配对。请在电脑 DSH 的「移动设备」里点『开启配对』，再重试";
+                    } else if (statusCode == 401) {
+                        error = "配对码不对，或者已经过期了。请重新点『开启配对』生成新码";
+                    } else {
+                        error = "配对失败（HTTP " + statusCode + "）：" + body;
+                    }
+                } catch (Exception failure) {
+                    error = "连不上电脑：" + failure.getMessage();
+                } finally {
+                    if (connection != null) {
+                        connection.disconnect();
+                    }
+                }
+                final String foundSecret = secret;
+                final String foundError = error;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (foundSecret != null) {
+                            connectTo(host, port, foundSecret);
+                        } else {
+                            setStatus(foundError);
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /** Read a small HTTP body fully; used only for the pairing reply. */
+    private static String readAll(InputStream stream) throws Exception {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] chunk = new byte[4096];
+        int read;
+        while ((read = stream.read(chunk)) != -1) {
+            buffer.write(chunk, 0, read);
+        }
+        return buffer.toString("UTF-8");
     }
 
     /** Walk the pairing URL so the server issues its cookie, then land on the GUI. */
@@ -249,7 +329,8 @@ public class MainActivity extends Activity implements Discovery.Listener {
                     listAdapter.add(device.label());
                 }
                 if (found.isEmpty()) {
-                    setStatus("还没找到设备。确认电脑上 DSH 已启动、并在同一 Wi-Fi 下");
+                    setStatus("还没找到电脑。先在电脑 DSH 的「移动设备」里点『开启配对』，"
+                            + "这台电脑才会出现在列表里（两分钟内有效）");
                 } else {
                     boolean anyResolved = false;
                     for (Discovery.Device device : found) {
@@ -260,7 +341,7 @@ public class MainActivity extends Activity implements Discovery.Listener {
                         }
                     }
                     setStatus(anyResolved
-                            ? "找到 " + found.size() + " 个设备，填密钥后点连接"
+                            ? "找到 " + found.size() + " 个设备，输入电脑上显示的 4 位码"
                             : "找到 " + found.size() + " 个设备，正在解析地址…");
                 }
             }

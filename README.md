@@ -63,10 +63,11 @@ pnpm add link:/path/to/dsh-lan-pair
 启动日志里应该出现：
 
 ```
-[dsh-lan-pair] listening on 0.0.0.0:8099 -> 127.0.0.1:3080
-[dsh-lan-pair] pair URL: http://<this-pc-lan-ip>:8099/__pair?k=<secret>
-[dsh-lan-pair] mDNS advertising <hostname> (win32)._dshpair._tcp.local at 192.168.x.x:8099
+[dsh-lan-pair] listening on 0.0.0.0:8099 -> 127.0.0.1:10723
+[dsh-lan-pair] pairing is off until you open a window (DSH settings -> 移动设备)
 ```
+
+**默认不广播**：在你点「开启配对」之前，手机扫描不到这台电脑。
 
 如果 Windows 防火墙弹出提示，请允许；或者手动放行这一个 TCP 端口（只对本子网）：
 
@@ -76,9 +77,17 @@ netsh advfirewall firewall add rule name="DSH LAN Pair" dir=in action=allow prot
 
 ---
 
-## 配对密钥
+## 配对流程（4 位码）
 
-首次启动时随机生成，保存在：
+1. 在电脑上打开 DSH 的 **设置 → 移动设备**，点 **开启配对**
+2. 电脑会弹出一个窗口显示 **4 位数字**，同时这台机器才开始在局域网里广播
+3. 在平板 App 里输入这 4 位数字
+4. 配对成功后窗口自动关闭、广播停止，App 拿到长期凭据，以后打开即连
+
+配对码的规则：**两分钟有效、只能使用一次、输错 5 次即作废**。因为码只有 4 位，
+这些限制是必需的——否则一万种组合几秒就能试完。
+
+不用手输长密钥。如果确实需要（例如 App 出问题），长期密钥仍然可作为后备：
 
 ```
 $DSH_HOME/lan-pair.json      # 例如 C:\Users\<you>\.dsh\lan-pair.json
@@ -88,15 +97,16 @@ $DSH_HOME/lan-pair.json      # 例如 C:\Users\<you>\.dsh\lan-pair.json
 { "secret": "bfrVhwqHdzue50xo", "createdAt": "2026-11-01T21:40:07.737Z" }
 ```
 
-想换密钥就删掉这个文件再重启 DSH。
-
-环境变量优先级更高，可用于临时指定：
+删掉这个文件再重启 DSH 就会换一个新的。环境变量优先级更高：
 
 | 变量 | 作用 |
 |---|---|
-| `DSH_LAN_PAIR_SECRET` | 覆盖密钥 |
+| `DSH_LAN_PAIR_SECRET` | 覆盖长期密钥 |
 | `DSH_LAN_PAIR_PORT` | 覆盖端口（默认 8099） |
+| `DSH_LAN_PAIR_TTL_MS` | 配对码有效期（默认 120000） |
 | `DSH_LAN_PAIR_DEBUG` | 输出 mDNS 报文诊断日志 |
+
+不开配对窗口时，也可以手动访问 `http://127.0.0.1:<端口>/lanpair/open` 来开启。
 
 ---
 
@@ -110,12 +120,13 @@ $DSH_HOME/lan-pair.json      # 例如 C:\Users\<you>\.dsh\lan-pair.json
 
 ## 使用
 
-1. 手机上打开 **DSH LAN**
-2. 它会扫描局域网并列出找到的电脑（例如 `DESKTOP-I9IRUS8 (win32) 192.168.1.14:8099`）
-3. 填入配对密钥，点 **连接**
-4. 之后每次打开都会自动连；想换电脑就按返回键调出连接面板
+1. 电脑上：DSH 设置 → **移动设备** → **开启配对**
+2. 平板上打开 **DSH LAN**，列表里出现这台电脑（例如 `DESKTOP-I9IRUS8 (win32) 192.168.1.14:8099`）
+3. 输入电脑上弹出的 4 位数字，点 **连接**
+4. 之后每次打开 App 都会自动连；想换电脑就按返回键调出连接面板
 
-如果扫描不到，可以直接在地址栏手动填 `IP:端口`——只要同一局域网就一定能用。
+如果扫描不到，确认电脑上已经点了「开启配对」（不点就不广播）；
+也可以直接在地址栏手动填 `IP:端口`。
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-lan-pair",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Expose the DeepSeek Harness web GUI to phones on the LAN with a pairing secret, so a mobile client can reach it without touching loopback or the launch token.",
   "keywords": [
     "dsh",
@@ -14,6 +14,7 @@
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
@@ -24,6 +25,10 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
     }
   },
   "peerDependencies": {
