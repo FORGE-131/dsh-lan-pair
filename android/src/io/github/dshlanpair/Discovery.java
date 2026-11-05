@@ -8,6 +8,7 @@ import android.util.Log;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 
 /**
@@ -27,6 +28,7 @@ final class Discovery {
         final String name;
         String host;
         int port;
+        String remote;
         boolean resolved;
 
         Device(String name) {
@@ -149,6 +151,16 @@ final class Discovery {
                         if (device.name.equals(resolved.getServiceName())) {
                             device.host = host;
                             device.port = resolved.getPort();
+            Map<String, byte[]> attributes = resolved.getAttributes();
+            if (attributes != null) {
+                byte[] raw = attributes.get("remote");
+                if (raw != null && raw.length > 0) {
+                    String value = new String(raw, java.nio.charset.StandardCharsets.UTF_8).trim();
+                    if (!value.isEmpty()) {
+                        device.remote = value;
+                    }
+                }
+            }
                             device.resolved = host != null && resolved.getPort() > 0;
                             break;
                         }

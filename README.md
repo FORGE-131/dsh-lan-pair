@@ -121,10 +121,83 @@ $DSH_HOME/lan-pair.json      # 例如 C:\Users\<you>\.dsh\lan-pair.json
 |---|---|
 | `DSH_LAN_PAIR_SECRET` | 覆盖长期密钥 |
 | `DSH_LAN_PAIR_PORT` | 覆盖端口（默认 8099） |
+| `DSH_LAN_PAIR_PUBLIC_URL` | 固定公网地址（命名隧道 / 反向代理时填） |
+| `DSH_LAN_PAIR_TUNNEL` | 自动拉起隧道的命令，插件从输出里抓公网地址 |
 | `DSH_LAN_PAIR_TTL_MS` | 配对码有效期（默认 120000） |
 | `DSH_LAN_PAIR_DEBUG` | 输出 mDNS 报文诊断日志 |
 
 不开配对窗口时，也可以手动访问 `http://127.0.0.1:<端口>/lanpair/open` 来开启。
+
+---
+
+## 远程访问（不在同一个局域网）
+
+配对本身是永久的：长期密钥不会过期，换网络**不需要重新配对**。
+但 App 记住的是「地址」，所以出门时需要一个从外网能到达的地址。两种方式：
+
+### 方式一：让插件托管隧道
+
+```powershell
+# 插件启动时自动拉起隧道，并从输出里抓公网地址
+$env:DSH_LAN_PAIR_TUNNEL = "cloudflared tunnel --url http://127.0.0.1:8099 --no-autoupdate"
+```
+
+### 方式二：填一个固定地址（命名隧道 / 反向代理）
+
+```powershell
+$env:DSH_LAN_PAIR_PUBLIC_URL = "https://dsh.example.com"
+```
+
+### 查当前可用地址
+
+插件在 DSH 源上提供：
+
+```
+GET /lanpair/info
+```
+
+```json
+{
+  "ok": true,
+  "port": 8099,
+  "lan": ["http://192.168.1.14:8099"],
+  "publicUrl": "https://xxx.trycloudflare.com",
+  "pairLink": "https://xxx.trycloudflare.com/__pair?k=...",
+  "lanPairLink": "http://192.168.1.14:8099/__pair?k=...",
+  "tunnel": { "running": true, "url": "https://xxx.trycloudflare.com" }
+}
+```
+
+### 多地址自动切换
+
+插件会把 `publicUrl` 写进 mDNS 的 TXT 记录（`remote=`）。
+App 在局域网发现电脑时，会同时拿到**局域网地址和远程地址**，并存成端点列表：
+
+```
+连接时按顺序探测（3 秒超时）：
+  1. 局域网地址   ← 在家秒连，不绕公网
+  2. 远程地址     ← 出门自动启用
+```
+
+第一个通的就用，无需手动切换。
+
+### 深链接（可做成二维码 / 快捷方式）
+
+```text
+dshlanpair://connect?base=<地址>&remote=<备用地址>&fallback=<再备用>&k=<密钥>
+dshlanpair://pair?u=<urlencode 的完整 __pair 链接>
+```
+
+例如，一个同时带局域网和隧道的链接：
+
+```text
+dshlanpair://connect?base=http%3A%2F%2F192.168.1.14%3A8099&remote=https%3A%2F%2Fxxx.trycloudflare.com&k=<密钥>
+```
+
+扫一下或点一下即可连接，不用手输地址。
+
+> 注意：Cloudflare 的**快速隧道**（`trycloudflare.com`）域名每次重启都会变，且同一出口 IP
+> 并发建立多个隧道会被限流。长期使用请配**命名隧道**或用 `DSH_LAN_PAIR_PUBLIC_URL` 指向固定域名。
 
 ---
 
@@ -133,7 +206,7 @@ $DSH_HOME/lan-pair.json      # 例如 C:\Users\<you>\.dsh\lan-pair.json
 从 Releases 下载 `dsh-lan-pair-<version>.apk`，侧载安装（需要允许"未知来源"）。
 
 - 最低 Android 8.0（API 26），未限制 CPU 架构（不含原生库）
-- 体积约 41 KB，用系统自带的 WebView 渲染，不打包浏览器内核
+- 体积约 45 KB，用系统自带的 WebView 渲染，支持 `https://` 远程地址与深链接，不打包浏览器内核
 - 应用签名是自签名证书（`CN=DSH LAN Pair`），不是商店签名
 
 ## 使用

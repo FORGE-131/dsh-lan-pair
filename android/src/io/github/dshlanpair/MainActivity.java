@@ -1,8 +1,10 @@
 package io.github.dshlanpair;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -30,7 +32,10 @@ import android.widget.TextView;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
+import java.net.URLEncoder;
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -58,6 +63,9 @@ public class MainActivity extends Activity implements Discovery.Listener {
     private EditText secretField;
     private ArrayAdapter<String> listAdapter;
     private final List<Discovery.Device> devices = new ArrayList<>();
+
+    /** Remote endpoints advertised by a discovered desktop (mDNS TXT). */
+    private final List<String> pendingRemotes = new ArrayList<>();
 
     private Discovery discovery;
     private SharedPreferences prefs;
@@ -90,16 +98,92 @@ public class MainActivity extends Activity implements Discovery.Listener {
 
         discovery = new Discovery(this);
 
-        String host = prefs.getString("host", null);
-        int port = prefs.getInt("port", 0);
-        String secret = prefs.getString("secret", null);
-        if (host != null && port > 0 && secret != null) {
-            hostPortField.setText(host + ":" + port);
-            secretField.setText(secret);
-            connectTo(host, port, secret);
-        } else {
-            startScan();
+        if (getIntent() != null && getIntent().getData() != null) {
+            handleDeepLink();
+            return;
         }
+
+        String secret = prefs.getString("secret", null);
+        String endpoints = prefs.getString("endpoints", null);
+        if (secret != null && endpoints != null && !endpoints.isEmpty()) {
+            List<String> bases = new ArrayList<>();
+            for (String part : endpoints.split("\\|")) {
+                if (!part.trim().isEmpty()) {
+                    bases.add(part.trim());
+                }
+            }
+            if (!bases.isEmpty()) {
+                hostPortField.setText(bases.get(0));
+                secretField.setText(secret);
+                connectWithEndpoints(bases, secret);
+            } else {
+                startScan();
+            }
+        } else {
+            String scheme = prefs.getString("scheme", "http");
+            String host = prefs.getString("host", null);
+            int port = prefs.getInt("port", 0);
+            if (host != null && port > 0 && secret != null) {
+                hostPortField.setText(buildBase(scheme, host, port));
+                secretField.setText(secret);
+                connectTo(scheme, host, port, secret);
+            } else {
+                startScan();
+            }
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleDeepLink();
+    }
+
+    /**
+     * dshlanpair://connect?base=<base>&k=<secret>
+     * dshlanpair://pair?u=<url-encoded .../__pair?k=... link>
+     */
+    private void handleDeepLink() {
+        Intent intent = getIntent();
+        Uri data = intent == null ? null : intent.getData();
+        if (data == null) {
+            return;
+        }
+        String secret = data.getQueryParameter("k");
+        String base = data.getQueryParameter("base");
+        String link = data.getQueryParameter("u");
+        if (link != null && !link.isEmpty()) {
+            String fromLink = secretFromLink(link);
+            if (fromLink != null) {
+                secret = fromLink;
+            }
+            int cut = link.indexOf("/__pair");
+            base = cut > 0 ? link.substring(0, cut) : link;
+        }
+        if (base == null || base.trim().isEmpty()) {
+            setStatus("链接里缺少 base 地址");
+            return;
+        }
+        if (secret == null || secret.trim().isEmpty()) {
+            setStatus("链接里缺少配对密钥");
+            return;
+        }
+        listAdapter.clear();
+        hostPortField.setText(base.trim());
+        secretField.setText(secret.trim());
+        List<String> bases = new ArrayList<>();
+        bases.add(base.trim());
+        // optional second hop: dshlanpair://connect?base=<lan>&remote=<public>&k=...
+        String remote = data.getQueryParameter("remote");
+        if (remote != null && !remote.trim().isEmpty()) {
+            bases.add(remote.trim());
+        }
+        String extra = data.getQueryParameter("fallback");
+        if (extra != null && !extra.trim().isEmpty()) {
+            bases.add(extra.trim());
+        }
+        connectWithEndpoints(bases, secret.trim());
     }
 
     /** Build the connect/pair screen entirely in code: no layout resources to compile. */
@@ -148,8 +232,14 @@ public class MainActivity extends Activity implements Discovery.Listener {
                     setStatus("这个设备还没解析出地址，稍等一下再点");
                     return;
                 }
+                pendingRemotes.clear();
+                if (device.remote != null && !device.remote.isEmpty()) {
+                    pendingRemotes.add(device.remote);
+                }
                 hostPortField.setText(device.host + ":" + device.port);
-                setStatus("已选择 " + device.name + "，填入配对密钥后点连接");
+                setStatus(device.remote != null && !device.remote.isEmpty()
+                        ? "已选择 " + device.name + "（含远程地址），填入配对密钥后点连接"
+                        : "已选择 " + device.name + "，填入配对密钥后点连接");
             }
         });
         outer.addView(deviceList);
@@ -206,31 +296,96 @@ public class MainActivity extends Activity implements Discovery.Listener {
         String raw = hostPortField.getText().toString().trim();
         String entered = secretField.getText().toString().trim();
         if (raw.isEmpty()) {
-            setStatus("先选一个设备，或手动填电脑地址（例如 192.168.1.14:8099）");
+            setStatus("先选一个设备，或手动填地址（192.168.1.14:8099 或 https://xxx.trycloudflare.com）");
             return;
         }
-        if (entered.isEmpty()) {
-            setStatus("请输入电脑上显示的 4 位配对码");
-            return;
+
+        // A pasted pair link (.../__pair?k=SECRET) also carries the secret.
+        String linkSecret = secretFromLink(raw);
+        if (linkSecret != null) {
+            entered = linkSecret;
         }
-        String host = raw;
-        int port = 8099;
-        int colon = raw.lastIndexOf(':');
-        if (colon > 0) {
-            host = raw.substring(0, colon);
+
+        String scheme = "http";
+        String host;
+        int port;
+        String base = raw;
+        int sep = base.indexOf("://");
+        if (sep > 0) {
             try {
-                port = Integer.parseInt(raw.substring(colon + 1));
-            } catch (NumberFormatException error) {
-                setStatus("端口不是数字：" + raw);
+                URI uri = URI.create(base);
+                String parsed = uri.getScheme();
+                scheme = parsed == null ? "http" : parsed.toLowerCase(Locale.ROOT);
+                host = uri.getHost();
+                port = uri.getPort();
+                if (port <= 0) {
+                    port = "https".equals(scheme) ? 443 : 80;
+                }
+            } catch (RuntimeException error) {
+                setStatus("地址格式不对：" + raw);
                 return;
             }
+            if (host == null || host.isEmpty()) {
+                setStatus("地址里没有主机名：" + raw);
+                return;
+            }
+        } else {
+            String hp = base;
+            int slash = hp.indexOf('/');
+            if (slash > 0) {
+                hp = hp.substring(0, slash);
+            }
+            host = hp;
+            port = 8099;
+            int colon = hp.lastIndexOf(':');
+            if (colon > 0) {
+                host = hp.substring(0, colon);
+                try {
+                    port = Integer.parseInt(hp.substring(colon + 1));
+                } catch (NumberFormatException error) {
+                    setStatus("端口不是数字：" + raw);
+                    return;
+                }
+            }
+        }
+
+        if (entered.isEmpty()) {
+            setStatus("请填电脑上显示的 4 位配对码，或直接粘贴完整配对链接");
+            return;
         }
         if (entered.matches("\\d{4}")) {
-            claimWithCode(host, port, entered);
+            claimWithCode(scheme, host, port, entered);
         } else {
-            // fallback: someone pasted the long-term secret from lan-pair.json
-            connectTo(host, port, entered);
+            connectTo(scheme, host, port, entered);
         }
+    }
+
+    /** Extracts k=SECRET from a pasted .../__pair?k=... link, or null. */
+    private static String secretFromLink(String raw) {
+        int at = raw.indexOf("__pair");
+        if (at < 0) {
+            return null;
+        }
+        int k = raw.indexOf("k=", at);
+        if (k < 0) {
+            return null;
+        }
+        String rest = raw.substring(k + 2);
+        int amp = rest.indexOf('&');
+        if (amp >= 0) {
+            rest = rest.substring(0, amp);
+        }
+        return rest.isEmpty() ? null : rest;
+    }
+
+    /** scheme + host + (non-default) port, without a trailing slash. */
+    private static String buildBase(String scheme, String host, int port) {
+        boolean isDefault = ("http".equals(scheme) && port == 80)
+                || ("https".equals(scheme) && port == 443);
+        if (port <= 0 || isDefault) {
+            return scheme + "://" + host;
+        }
+        return scheme + "://" + host + ":" + port;
     }
 
     /**
@@ -238,7 +393,11 @@ public class MainActivity extends Activity implements Discovery.Listener {
      * secret, which we store so the code is never needed again.
      */
     private void claimWithCode(final String host, final int port, final String code) {
-        setStatus("正在用配对码连接 " + host + ":" + port + " …");
+        claimWithCode("http", host, port, code);
+    }
+
+    private void claimWithCode(final String scheme, final String host, final int port, final String code) {
+        setStatus("正在用配对码连接 " + buildBase(scheme, host, port) + " …");
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -246,7 +405,7 @@ public class MainActivity extends Activity implements Discovery.Listener {
                 String error = null;
                 HttpURLConnection connection = null;
                 try {
-                    URL url = new URL("http://" + host + ":" + port + "/__claim?code=" + code);
+                    URL url = new URL(buildBase(scheme, host, port) + "/__claim?code=" + code);
                     connection = (HttpURLConnection) url.openConnection();
                     connection.setConnectTimeout(6000);
                     connection.setReadTimeout(6000);
@@ -281,7 +440,7 @@ public class MainActivity extends Activity implements Discovery.Listener {
                     @Override
                     public void run() {
                         if (foundSecret != null) {
-                            connectTo(host, port, foundSecret);
+                            connectTo(scheme, host, port, foundSecret);
                         } else {
                             setStatus(foundError);
                         }
@@ -304,19 +463,94 @@ public class MainActivity extends Activity implements Discovery.Listener {
 
     /** Walk the pairing URL so the server issues its cookie, then land on the GUI. */
     private void connectTo(String host, int port, String secret) {
-        discovery.stop();
-        connecting = true;
-        prefs.edit()
-                .putString("host", host)
-                .putInt("port", port)
-                .putString("secret", secret)
-                .apply();
-        String url = "http://" + host + ":" + port + "/__pair?k=" + secret;
-        panel.setVisibility(View.GONE);
-        setStatus("正在连接 " + host + ":" + port + " …");
-        web.loadUrl(url);
+        connectTo("http", host, port, secret);
     }
 
+    private void connectTo(String scheme, String host, int port, String secret) {
+        List<String> bases = new ArrayList<>();
+        bases.add(buildBase(scheme, host, port));
+        bases.addAll(pendingRemotes);
+        connectWithEndpoints(bases, secret);
+    }
+
+    /**
+     * Tries every candidate base URL in order and keeps the first that answers,
+     * so a desktop paired on the LAN keeps working after the phone leaves it.
+     */
+    private void connectWithEndpoints(final List<String> candidates, final String secret) {
+        final List<String> bases = new ArrayList<>();
+        for (String candidate : candidates) {
+            String trimmed = candidate == null ? "" : candidate.trim();
+            if (!trimmed.isEmpty() && !bases.contains(trimmed)) {
+                bases.add(trimmed);
+            }
+        }
+        if (bases.isEmpty() || secret == null || secret.isEmpty()) {
+            setStatus("地址或密钥为空，请重新配对");
+            return;
+        }
+        discovery.stop();
+        connecting = true;
+        panel.setVisibility(View.GONE);
+        setStatus("正在连接 " + bases.get(0) + " …");
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                String good = null;
+                for (String base : bases) {
+                    if (probePair(base, secret)) {
+                        good = base;
+                        break;
+                    }
+                }
+                final String found = good;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (found == null) {
+                            panel.setVisibility(View.VISIBLE);
+                            setStatus("这 " + bases.size() + " 个地址都连不上，检查网络或重新配对");
+                            return;
+                        }
+                        StringBuilder joined = new StringBuilder();
+                        for (String base : bases) {
+                            if (joined.length() > 0) {
+                                joined.append('|');
+                            }
+                            joined.append(base);
+                        }
+                        prefs.edit()
+                                .putString("secret", secret)
+                                .putString("endpoints", joined.toString())
+                                .putString("lastGood", found)
+                                .apply();
+                        web.loadUrl(found + "/__pair?k=" + secret);
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /** Reachability probe: /__pair answers 303 when the secret is right. */
+    private static boolean probePair(String base, String secret) {
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(base + "/__pair?k=" + URLEncoder.encode(secret, "UTF-8"));
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setInstanceFollowRedirects(false);
+            connection.setConnectTimeout(3000);
+            connection.setReadTimeout(3000);
+            connection.setRequestMethod("GET");
+            int code = connection.getResponseCode();
+            return code == 200 || code == 302 || code == 303;
+        } catch (Exception ignored) {
+            return false;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
     @Override
     public void onDevicesChanged(List<Discovery.Device> found) {
         main.post(new Runnable() {
